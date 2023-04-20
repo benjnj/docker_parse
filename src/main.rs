@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 // use std::fmt::format;
+use std::env;
 use std::fs::{self, File};
 use std::io::Write;
 use std::str::FromStr;
@@ -70,7 +71,7 @@ fn write_r_pkgs(pkgs: HashMap<PackageType, HashSet<String>>) {
     for (pkg_type, pkg_map) in pkgs.iter() {
         let mut chunks = pkg_map.iter().peekable();
         while chunks.peek().is_some() {
-            let chunk_vec: Vec<&String> = chunks.by_ref().take(5).collect();
+            let chunk_vec: Vec<&String> = chunks.by_ref().take(10).collect();
             let pkg_name = chunk_vec
                 .iter()
                 .map(|&x| format!("'{}'", x))
@@ -89,9 +90,28 @@ fn write_r_pkgs(pkgs: HashMap<PackageType, HashSet<String>>) {
 }
 
 fn main() {
-    let file = fs::read_to_string("chbv_debug.sh").expect("no file found");
-    let content: Vec<String> = file
-        .lines()
+    let args: Vec<String> = env::args().collect();
+    let default_path = ".".to_string();
+    let dir_path = args.get(1).unwrap_or(&default_path);
+    let filenames: Vec<_> = fs::read_dir(dir_path)
+        .unwrap()
+        .filter_map(|entry| {
+            let path = entry.unwrap().path();
+            if path.is_file() && path.extension().unwrap_or_default() == "sh" {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .map(|path| fs::read_to_string(path).unwrap_or_default())
+        .collect();
+    let data: Vec<_> = filenames
+        .iter()
+        .flat_map(|line| line.split("\n"))
+        .map(|file| file.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    let content: Vec<String> = data
+        .iter()
         .filter(|s| s.contains("RUN"))
         .map(|x| {
             x.split_whitespace()
@@ -101,6 +121,5 @@ fn main() {
         })
         .collect();
     let r_pkgs = process_r_pkgs(content);
-    println!("{:?}", r_pkgs);
     write_r_pkgs(r_pkgs);
 }
