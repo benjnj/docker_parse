@@ -1,5 +1,8 @@
 [package]
 name = "docker_parse"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
+
+[dependencies]
+walkdir = "2.3.3"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
