@@ -1,11 +1,8 @@
+use docker_parse::parser::{parse_r_pkg, process_files};
 use std::collections::HashMap;
-// use std::fmt::format;
-use std::env;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::Write;
 use std::str::FromStr;
-
-use walkdir::WalkDir;
 
 #[derive(Debug, Eq, Hash, PartialEq, Clone)]
 enum PackageType {
@@ -33,10 +30,10 @@ impl FromStr for PackageType {
 
     fn from_str(input: &str) -> Result<PackageType, Self::Err> {
         match input {
-            x if x.contains("install.packages") => Ok(PackageType::BioConductor),
-            x if x.contains("BiocManager") => Ok(PackageType::DevTools),
-            x if x.contains("devtools") => Ok(PackageType::Remote),
-            x if x.contains("remotes") => Ok(PackageType::Normal),
+            x if x.contains("BiocManager") => Ok(PackageType::BioConductor),
+            x if x.contains("devtools") => Ok(PackageType::DevTools),
+            x if x.contains("remotes") || x.contains("github") => Ok(PackageType::Remote),
+            x if x.contains("install.packages") => Ok(PackageType::Normal),
             _ => Ok(PackageType::Unique),
         }
     }
@@ -47,30 +44,49 @@ fn process_r_pkgs(script: Vec<String>) -> HashMap<PackageType, Vec<String>> {
         .iter()
         .filter(|x| x.contains("R"))
         .map(|item| {
-            let split_content: Vec<_> = item.split(|c: char| c == '(' || c == ')').collect();
-            let parsed_item = split_content.get(1).unwrap_or(&"");
-            let matched_item = parsed_item.replace("'", "");
+            let matched_item = match parse_r_pkg(item) {
+                Ok(x) => x.1,
+                Err(_) => Vec::new(),
+            };
             let package_type = PackageType::from_str(item).unwrap();
             (package_type, matched_item)
         })
         .fold(HashMap::new(), |mut acc, (key, val)| {
             let item = acc.entry(key).or_insert(Vec::new());
-            if !item.contains(&val) {
-                item.push(val)
-            };
+            for pkg in val.iter() {
+                if !item.contains(&pkg) && !pkg.is_empty() {
+                    item.push(pkg.to_owned())
+                };
+            }
             acc
         });
     return r_packages;
 }
 
-fn write_r_pkgs(pkgs: HashMap<PackageType, Vec<String>>) {
+fn write_r_pkgs(pkgs: HashMap<PackageType, Vec<String>>) -> std::io::Result<()> {
     let install_method = "RUN R --no-save -e";
     let path = "Dockerfile";
-    let mut output = File::create(path).expect("couldn't create the file");
+    const NUM_OF_PKGS: usize = 10;
+    let mut output = File::create(path)?;
     for (pkg_type, pkg_map) in pkgs.iter() {
-        for chunk in pkg_map.chunks(10) {
+        for chunk in pkg_map.chunks(NUM_OF_PKGS) {
+            let full_pkg = chunk
+                .iter()
+                .filter(|&x| x.contains("="))
+                .map(|s| s.to_owned())
+                .collect::<Vec<String>>();
+            for full in full_pkg.iter() {
+                write!(
+                    output,
+                    "{} \"{}({})\"\n",
+                    install_method,
+                    pkg_type.as_str(),
+                    full
+                )?
+            }
             let pkg_name = chunk
                 .iter()
+                .filter(|&x| !x.contains("="))
                 .map(|x| format!("'{}'", x))
                 .collect::<Vec<String>>()
                 .join(", ");
@@ -80,39 +96,25 @@ fn write_r_pkgs(pkgs: HashMap<PackageType, Vec<String>>) {
                 install_method,
                 pkg_type.as_str(),
                 pkg_name
-            )
-            .expect("Package failed to write");
+            )?;
         }
     }
+    Ok(())
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    let default_path = ".".to_string();
-    let dir_path = args.get(1).unwrap_or(&default_path);
-    let walk = WalkDir::new(dir_path).max_depth(2);
-    let filenames: Vec<_> = walk
-        .into_iter()
-        .filter(|f| f.is_ok())
-        .map(|f| f.unwrap())
-        .collect();
-    let data: Vec<_> = filenames
-        .iter()
-        .map(|p| p.path())
-        .filter(|p| p.is_file() && p.extension().unwrap_or_default() == "sh")
-        .map(|content| fs::read_to_string(content).unwrap_or_default())
-        .collect();
-    let parsed_data: Vec<_> = data
-        .iter()
-        .flat_map(|l| l.split("\n"))
-        .filter(|s| !s.is_empty() && s.contains("RUN"))
-        .map(|x| {
-            x.replace("&&", "").split_whitespace()
-                .filter(|&x| x != "RUN")
-                .collect::<Vec<&str>>()
-                .join(" ")
-        })
-        .collect();
+fn main() -> std::io::Result<()> {
+    let parsed_data = process_files("sh");
     let r_pkgs = process_r_pkgs(parsed_data);
-    write_r_pkgs(r_pkgs);
+    write_r_pkgs(r_pkgs)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parse_working() {
+        let test_case = parse_r_pkg("R --no-save -e \"install.packages('ggtree')\"");
+        assert_eq!(test_case,Ok(("install.packages",vec!["ggtree".to_string()])));
+    }
 }
