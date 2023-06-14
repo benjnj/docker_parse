@@ -28,6 +28,7 @@ pub mod parser {
         let pkgs = text.split(" ").map(|s| s.to_owned()).collect();
         Ok((name, pkgs))
     }
+
     pub fn process_files(extension: &str) -> Vec<String> {
         let args: Vec<String> = env::args().collect();
         let default_path = ".".to_string();
